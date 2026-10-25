@@ -71,3 +71,5 @@ disk fields flickered to `null`. Freshness is now per source (interval + 5 s gra
 | Visual check of the dashboard after the fix (black background, gradient direction, icon colours, no flicker) | ✅ confirmed by the user |
 | Sustained operation (renderer) | ✅ 15 min: 901 polls (1.00/s), 0 gaps > 3 s, uptime 1004 s without reboot, heap steady at 21.9 KB (start 22.0 KB), `err` 0 |
 | Disk I/O sparkline (`firmware-renderer-io-f2b6c2c3.bin`, 607,280 B, spark `u` series, fw `-w2`) flashed via `POST /api/v1/ota/fw` | ✅ reports `-w2`, `err` 0, 23.7 KB free (23.0 KB block); 60 polls in 1 min, 0 gaps; `io` sent with 98 + 98 samples, screen 3564 B |
+| Widget limit 40 (`firmware-renderer-w3-4caa0f66.bin`, 607,536 B, fw `-w3`) flashed via `POST /api/v1/ota/fw` | ✅ reports `-w3`, `err` 0, 23.5 KB free (22.8 KB block); 66 polls in 1 min, 0 gaps; 33 widgets (I/O MB/s numbers), screen ~3.2–3.5 KB |
+| Disk I/O source and scale | `io_disks = ["nvme0n1"]`; full scale from an O_DIRECT benchmark on this drive (rated 7000/7000 MB/s; 88 % full, under background load): fresh-data reads ~4.0 GB/s, writes ~1.1 GB/s; log scale shows 1–7 MB/s background writes as a 5–7 px band |

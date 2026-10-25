@@ -13,7 +13,7 @@ log = logging.getLogger(__name__)
 
 PROTO = 1
 MAX_BYTES = 4096  # device rejects larger responses (docs/GFX-LAB.md: ~2.3x heap while parsing)
-MAX_WIDGETS = 32
+MAX_WIDGETS = 40  # renderer firmware -w3 (32 before: the dashboard checks the device's level)
 
 
 def _overlap(a: tuple[int, int, int, int], b: tuple[int, int, int, int]) -> bool:

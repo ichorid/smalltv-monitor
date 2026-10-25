@@ -44,6 +44,12 @@ class Config:
     interval: float = 1.0
     disk_interval: float = 10.0
     disk_paths: list[str] = field(default_factory=lambda: ["/", "/home"])
+    # Disk I/O sparkline: block devices to sum ([] = every physical disk), and the MB/s each series is drawn
+    # against (its full height; 0 = the busiest moment shown)
+    io_disks: list[str] = field(default_factory=list)
+    io_max_read_mb_s: float = 0.0
+    io_max_write_mb_s: float = 0.0
+    io_scale: str = "log"  # "log": height ~ log(1 + MB/s), so 1 MB/s and 1 GB/s both show; or "linear"
     gpu: str = "nvidia"  # "nvidia" or "none"
     gpu_index: int = 0
     stale_after: float = 5.0  # grace beyond a source's own interval before it is reported unavailable
@@ -97,6 +103,10 @@ def load_config(argv: list[str]) -> Config:
             setattr(config, key, value)
     if min(config.interval, config.disk_interval, config.stale_after) <= 0:
         parser.error("interval, disk_interval and stale_after must be positive")
+    if min(config.io_max_read_mb_s, config.io_max_write_mb_s) < 0:
+        parser.error("io_max_read_mb_s and io_max_write_mb_s must be 0 (auto) or positive")
+    if config.io_scale not in ("log", "linear"):
+        parser.error('io_scale must be "log" or "linear"')
     try:
         parse_hhmm(config.night_start), parse_hhmm(config.night_end)
     except ValueError:
@@ -165,7 +175,7 @@ def build_collectors(config: Config) -> list[Collector]:
         CpuCollector(config.interval),
         MemoryCollector(config.interval),
         DiskCollector(config.disk_interval, config.disk_paths),
-        DiskIoCollector(config.interval),
+        DiskIoCollector(config.interval, config.io_disks),
     ]
     if config.gpu == "nvidia":
         collectors.append(NvidiaGpuCollector(config.interval, config.gpu_index))
@@ -196,7 +206,9 @@ def main(argv: list[str] | None = None) -> int:
     history.track("gpu", "gpu", lambda d: d.get("util_pct"))
     store.add_listener(history.on_sample)
     schedule = NightSchedule(config.day_bri, config.night_bri, parse_hhmm(config.night_start), parse_hhmm(config.night_end))
-    composer = DashboardComposer(store, history, schedule, config.title or None)
+    composer = DashboardComposer(store, history, schedule, config.title or None,
+                                 io_max_mb_s=(config.io_max_read_mb_s, config.io_max_write_mb_s),
+                                 io_scale=config.io_scale)
     runners = [CollectorRunner(c, store, stop, config.stale_after) for c in build_collectors(config)]
     for runner in runners:
         runner.start()

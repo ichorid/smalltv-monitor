@@ -272,11 +272,11 @@ def demo_screen() -> dict[str, Any]:
     store, history = SnapshotStore(), History()
     track_history(history)
     store.add_listener(history.on_sample)
-    for i in range(98):
+    for i in range(60):
         store.put("cpu", {"percent": 30 + 25 * math.sin(i / 7) ** 2, "user": 0, "system": 0, "per_core": []}, 60)
-        # A write burst, then a long read with writes underneath
-        store.put("diskio", {"read_mib_s": 60 * math.sin((i - 40) / 18) ** 2 if 40 <= i < 95 else 0.3,
-                             "write_mib_s": 45 * math.exp(-((i - 22) / 8) ** 2) + 12 * (60 <= i < 90) + 0.5}, 60)
+        # A write burst, then a long read with writes underneath that outlast it
+        store.put("diskio", {"read_mb_s": 60 * math.sin((i - 22) / 11) ** 2 if 22 <= i < 56 else 0.3,
+                             "write_mb_s": 45 * math.exp(-((i - 10) / 5) ** 2) + 18 * (40 <= i < 59) + 0.5}, 60)
     store.put("cpu", {"percent": 41.0, "user": 33.5, "system": 7.5, "count": 16, "load1": 4.2,
                       "per_core": [12, 35, 96, 8, 41, 22, 67, 5, 30, 18, 91, 14, 52, 9, 26, 44]}, 60)
     store.put("memory", {"used_gib": 28.6, "cache_gib": 22.3, "total_gib": 61.6, "percent": 46.4,

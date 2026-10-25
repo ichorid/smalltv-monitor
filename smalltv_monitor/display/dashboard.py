@@ -8,8 +8,8 @@ Layout (240x240), [x] = 16 px icon:
     [claude] [bar] 36%      [bar]   9%    <- remaining allowance: green >= 50 %, yellow >= 25 %, red
     [codex]  [bar] 77%      [bar]  72%
     [cursor] [bar] 24%     3-2 5-6 2      <- Cursor: billing cycle only; right: time to reset, all rows
-    [cpu]    ~~ cpu ~~  41%  ~~~ i/o ~~~   <- CPU: deep red (bottom) to yellow (top); I/O: reads (green)
-                                             drawn over writes (red)
+    [cpu]    ~~ cpu ~~  41%  ~ i/o ~  12  <- CPU: deep red (bottom) to yellow (top); I/O: reads (green)
+                                    0.4      drawn over writes (red); MB/s now: write (red) over read (green)
     [mem]    [used|shared|buf|cache] 29/62G   <- htop's memory meter
     [disk]   /       9.4G    /home     99G    <- yellow < 10 % free, red < 5 %
     [gpu]       250/300W    VRAM     9.6G
@@ -19,6 +19,7 @@ Layout (240x240), [x] = 16 px icon:
 from __future__ import annotations
 
 import math
+import re
 import time
 from collections.abc import Mapping
 from datetime import UTC, datetime
@@ -45,17 +46,17 @@ ORANGE_DIM = "#5c3a10"
 BLUE = "#3b82f6"
 MAGENTA = "#d946ef"
 CLAUDE = "#d97757"
-# Cold -> hot scale for CPU load (number colour and sparkline height gradient); the teal stop keeps
-# blue -> yellow from passing through grey
-HEAT = ((0, "#3b82f6"), (25, "#14b8a6"), (50, "#f2cc38"), (75, "#fd8c00"), (100, "#f2384c"))
-# CPU sparkline height gradient: deep red at the bottom to yellow at the top
-SPARK_GRAD = ((0, "#8b0000"), (100, YELLOW))
+# CPU load colour, deep red at 0 % to yellow at 100 %: the sparkline's height gradient and the number
+CPU_GRAD = ((0, "#8b0000"), (100, YELLOW))
 
 # CPU row: CPU sparkline + number in the left half, disk I/O sparkline in the right half (one sample per px)
 CPU_SPARK = (30, 104, 60, 34)
 CPU_VALUE = (90, 104, 40, 34)
-IO_SPARK = (134, 104, 98, 34)
-IO_FLOOR_MIB_S = 10.0  # the I/O scale never drops below this, so background trickles stay near the bottom
+IO_SPARK = (134, 104, 60, 34)
+IO_WRITE = (196, 104, 36, 17)  # current MB/s, write above read, right of the I/O sparkline
+IO_READ = (196, 121, 36, 17)
+IO_NUMBERS_FW = 3  # renderer firmware -w3: up to 40 widgets (the two numbers make 33)
+IO_FLOOR_MB_S = 10.0  # the automatic I/O scale never drops below this, so trickles stay near the bottom
 ICON_X = 8
 X0 = 30  # content starts right of the 18 px icon column
 COL1_X, COL2_X = X0, 134  # the two limit columns: bar (56 px) + value (40 px) each
@@ -97,6 +98,28 @@ def _free_colour(free: float, total: float) -> str:
     return RED if share < 0.05 else YELLOW if share < 0.10 else WHITE
 
 
+def _rate(mb_s: float) -> str:
+    """Throughput in MB/s, at most 4 characters: 0.4, 12, 523, 2.4G (GB/s)."""
+    if mb_s < 9.95:
+        return f"{mb_s:.1f}"
+    if mb_s < 999.5:
+        return f"{mb_s:.0f}"
+    return f"{mb_s / 1000:.1f}G"
+
+
+def _io_level(mb_s: float, full_scale: float, log: bool) -> float:
+    """Height fraction of a throughput against the full scale: log(1 + MB/s) / log(1 + full scale), or linear."""
+    if log:
+        return min(1.0, math.log1p(max(0.0, mb_s)) / math.log1p(full_scale))
+    return min(1.0, mb_s / full_scale)
+
+
+def _firmware_level(display: Mapping[str, Any] | None) -> int | None:
+    """Renderer protocol level from the polling device's `fw` ("...-w3" -> 3); None if unknown."""
+    match = re.search(r"-w(\d+)$", (display or {}).get("fw") or "")
+    return int(match[1]) if match else None
+
+
 def _gib(value: float) -> str:
     return f"{value:.1f}" if value < 10 else f"{value:.0f}"
 
@@ -129,13 +152,16 @@ def _reset_summary(harnesses: Mapping[str, Any], now: datetime) -> str:
 def track_history(history: History) -> None:
     """Record the series this screen's sparklines draw, at the collectors' cadence."""
     history.track("cpu", "cpu", lambda d: d["percent"])
-    history.track("io_read", "diskio", lambda d: d["read_mib_s"])
-    history.track("io_write", "diskio", lambda d: d["write_mib_s"])
+    history.track("io_read", "diskio", lambda d: d["read_mb_s"])
+    history.track("io_write", "diskio", lambda d: d["write_mb_s"])
 
 
 class DashboardComposer:
-    def __init__(self, store: SnapshotStore, history: History, schedule: NightSchedule, title: str | None = None):
+    def __init__(self, store: SnapshotStore, history: History, schedule: NightSchedule, title: str | None = None,
+                 io_max_mb_s: tuple[float, float] = (0.0, 0.0), io_scale: str = "log"):
         self._store = store
+        self._io_max_read, self._io_max_write = io_max_mb_s  # full scale per series; 0 = automatic
+        self._io_log = io_scale == "log"
         self._history = history
         self._schedule = schedule
         self._title = title  # unused by this layout; kept for alternative screens
@@ -153,7 +179,7 @@ class DashboardComposer:
             self._slack(data.get("slack")),
             *self._limits(data.get("limits"), now),
             *self._cpu(data.get("cpu")),
-            self._io(data.get("diskio")),
+            *self._io(data.get("diskio"), _firmware_level(data.get("display"))),
             *self._memory(data.get("memory")),
             *self._disks(data.get("disk")),
             *self._gpu(data.get("gpu")),
@@ -212,24 +238,38 @@ class DashboardComposer:
             _icon("icpu", "cpu", 104, height=34),
             # Solid heat area, no outline: every pixel's colour is set by its height (fa=100 makes the
             # edge pixels the same colour as their row, so no line is visible)
-            Spark(id="cpuh", r=CPU_SPARK, grad=SPARK_GRAD, fa=100, max=100,
+            Spark(id="cpuh", r=CPU_SPARK, grad=CPU_GRAD, fa=100, max=100,
                   v=self._history.get("cpu", CPU_SPARK[2]) or None),
             ValueText(id="cpuv", r=CPU_VALUE, a="r",
-                      v=None if cpu is None else (f"{cpu['percent']:.0f}%", gradient_colour(HEAT, cpu["percent"]))),
+                      v=None if cpu is None else (f"{cpu['percent']:.0f}%", gradient_colour(CPU_GRAD, cpu["percent"]))),
         ]
 
-    def _io(self, diskio: Mapping[str, Any] | None) -> Widget:
-        """Disk throughput: writes as a solid red area, reads drawn over them as a solid green one."""
+    def _io(self, diskio: Mapping[str, Any] | None, firmware: int | None) -> list[Widget]:
+        """Disk throughput: writes as a solid red area, reads drawn over them as a solid green one; current
+        MB/s to the right (write in red above read in green). The numbers are left out for a device whose
+        firmware takes fewer than 33 widgets; unknown firmware (preview, tests) gets them."""
+        numbers: list[Widget] = []
+        if firmware is None or firmware >= IO_NUMBERS_FW:
+            write = None if diskio is None else (_rate(diskio["write_mb_s"]), RED)
+            read = None if diskio is None else (_rate(diskio["read_mb_s"]), GREEN)
+            numbers = [ValueText(id="iow", r=IO_WRITE, a="r", v=write), ValueText(id="ior", r=IO_READ, a="r", v=read)]
+        return [self._io_spark(diskio), *numbers]
+
+    def _io_spark(self, diskio: Mapping[str, Any] | None) -> Spark:
         samples = IO_SPARK[2]
         reads, writes = self._history.get("io_read", samples), self._history.get("io_write", samples)
         if diskio is None or not reads:
             return Spark(id="io", r=IO_SPARK, v=None)
-        # Both series share one scale: the busiest moment shown (at least IO_FLOOR_MIB_S) is the top row.
-        # Samples are sent as pixel rows (0..h-1): no visible loss, and at most two digits each
+        # Each series is drawn against its configured full scale (io_max_read_mb_s / io_max_write_mb_s, e.g. the
+        # disk's bandwidth); unset, against the busiest moment shown of either (at least IO_FLOOR_MB_S). On the
+        # log scale (default) everyday MB/s stay visible next to GB/s bursts. Samples are sent as pixel rows
+        # (0..h-1): no visible loss, and at most two digits each
         rows = IO_SPARK[3] - 1
-        scale = max(IO_FLOOR_MIB_S, *reads, *writes)
+        auto = max(IO_FLOOR_MB_S, *reads, *writes)
+        read_scale, write_scale = self._io_max_read or auto, self._io_max_write or auto
         return Spark(id="io", r=IO_SPARK, max=rows, c=GREEN, fill=GREEN, uc=RED,
-                     v=[rows * r / scale for r in reads], u=[rows * w / scale for w in writes])
+                     v=[rows * _io_level(r, read_scale, self._io_log) for r in reads],
+                     u=[rows * _io_level(w, write_scale, self._io_log) for w in writes])
 
     @staticmethod
     def _memory(mem: Mapping[str, Any] | None) -> list[Widget]:

@@ -171,25 +171,65 @@ class ComposerTest(unittest.TestCase):
         self.assertEqual(w["gpow"]["v"], ["250/300W", "#f2cc38"])
         self.assertEqual(w["gvram"]["v"], ["15G", "#f2384c"])  # > 90 % used
         self.assertEqual(w["cpuh"]["v"], [41])
+        self.assertEqual(w["cpuv"]["v"], ["41%", "#b55417"])  # deep red (0 %) -> yellow (100 %), like the sparkline
         self.assertEqual(w["cpuh"]["r"], [30, 104, 60, 34])  # left half of the row, with the number
-        self.assertEqual(w["io"]["r"], [134, 104, 98, 34])  # right half: disk I/O
+        self.assertEqual(w["io"]["r"], [134, 104, 60, 34])  # right half: disk I/O sparkline...
+        self.assertEqual((w["iow"]["r"], w["ior"]["r"]), ([196, 104, 36, 17], [196, 121, 36, 17]))  # ...+ MB/s
         self.assertIsNone(w["io"]["v"])  # no diskio sample yet
+        self.assertIsNone(w["iow"]["v"])
+        self.assertEqual(len(doc["w"]), 33)
 
     def test_disk_io_sparkline(self) -> None:
         for read, write in ((0.0, 0.0), (2.0, 5.0), (40.0, 10.0)):
-            self.store.put("diskio", {"read_mib_s": read, "write_mib_s": write, "disks": ["sda"]}, 60)
+            self.store.put("diskio", {"read_mb_s": read, "write_mb_s": write, "disks": ["sda"]}, 60)
         io = self.widgets()[1]["io"]
-        # Reads (main series, green area) drawn over writes (u, red area); both scaled so the busiest sample
-        # shown (40 MiB/s) is the top pixel row (33 of a 34 px rect)
+        # Reads (main series, green area) drawn over writes (u, red area); both on a log scale whose top pixel
+        # row (33 of a 34 px rect) is the busiest sample shown (40 MB/s): log(1 + x) / log(1 + 40)
         self.assertEqual((io["c"], io["fill"], io["uc"], io["max"]), ("#3fb950", "#3fb950", "#f2384c", 33))
-        self.assertEqual(io["v"], [0, 2, 33])
-        self.assertEqual(io["u"], [0, 4, 8])
+        self.assertEqual(io["v"], [0, 10, 33])
+        self.assertEqual(io["u"], [0, 16, 21])
         self.assertNotIn("grad", io)
 
+    def test_disk_io_numbers(self) -> None:
+        self.store.put("diskio", {"read_mb_s": 40.0, "write_mb_s": 0.3, "disks": ["sda"]}, 60)
+        w = self.widgets()[1]
+        self.assertEqual(w["iow"]["v"], ["0.3", "#f2384c"])  # MB/s: write in red, above...
+        self.assertEqual(w["ior"]["v"], ["40", "#3fb950"])  # ...read in green, like its area
+        self.assertEqual((w["iow"]["a"], w["ior"]["a"]), ("r", "r"))
+
+    def test_disk_io_numbers_need_firmware_w3(self) -> None:
+        self.store.put("diskio", {"read_mb_s": 1.0, "write_mb_s": 1.0, "disks": ["sda"]}, 60)
+        for fw, shown in (("v1.5.0-2-g965c-dev-w2", False), ("v1.5.0-3-gabcd-w3", True), ("v1.6.0-w12", True)):
+            self.store.put("display", {"fw": fw}, 60)
+            doc, w = self.widgets()
+            with self.subTest(fw=fw):
+                self.assertEqual("iow" in w and "ior" in w, shown)
+                self.assertLessEqual(len(doc["w"]), 33 if shown else 32)
+
+    def test_rate_format(self) -> None:
+        from smalltv_monitor.display.dashboard import _rate
+
+        cases = ((0.0, "0.0"), (0.3, "0.3"), (9.96, "10"), (996, "996"), (1000, "1.0G"), (7000, "7.0G"))
+        for mb_s, text in cases:
+            with self.subTest(mb_s=mb_s):
+                self.assertEqual(_rate(mb_s), text)
+
+    def test_disk_io_configured_scale_per_series(self) -> None:
+        for read, write in ((1000, 250), (8000, 2000)):
+            self.store.put("diskio", {"read_mb_s": read, "write_mb_s": write, "disks": ["nvme0n1"]}, 60)
+        for scale, full, reads, writes in (("linear", (4000, 1000), [8, 33], [8, 33]),
+                                           ("log", (4000, 1100), [27, 33], [26, 33])):
+            composer = DashboardComposer(self.store, self.history, NightSchedule(), io_max_mb_s=full, io_scale=scale)
+            io = {w["id"]: w for w in json.loads(composer.compose(self.NOON).fit())["w"]}["io"]
+            with self.subTest(scale=scale):
+                # linear: 1000 of 4000 MB/s = a quarter, 250 of 1000; log: log(1 + x) / log(1 + full scale).
+                # Above the full scale clamps to the top row
+                self.assertEqual((io["v"], io["u"]), (reads, writes))
+
     def test_disk_io_scale_has_a_floor(self) -> None:
-        self.store.put("diskio", {"read_mib_s": 0.5, "write_mib_s": 1.0, "disks": ["sda"]}, 60)
+        self.store.put("diskio", {"read_mb_s": 0.5, "write_mb_s": 1.0, "disks": ["sda"]}, 60)
         io = self.widgets()[1]["io"]
-        self.assertEqual((io["v"], io["u"]), ([2], [3]))  # scaled to 10 MiB/s, not to the 1 MiB/s peak
+        self.assertEqual((io["v"], io["u"]), ([6], [10]))  # scaled to 10 MB/s, not to the 1 MB/s peak
 
     def test_no_data_at_all(self) -> None:
         doc, w = self.widgets(datetime(2026, 1, 1, 23, 0).astimezone())  # 23:00 local
@@ -280,14 +320,14 @@ class IconTest(unittest.TestCase):
 
 
 class GradientTest(unittest.TestCase):
-    def test_heat_scale(self) -> None:
-        from smalltv_monitor.display.dashboard import HEAT, gradient_colour
+    def test_cpu_scale(self) -> None:
+        from smalltv_monitor.display.dashboard import CPU_GRAD, gradient_colour
 
-        self.assertEqual(gradient_colour(HEAT, -5), "#3b82f6")  # clamped cold
-        self.assertEqual(gradient_colour(HEAT, 0), "#3b82f6")
-        self.assertEqual(gradient_colour(HEAT, 50), "#f2cc38")  # exact stop: yellow in the middle
-        self.assertEqual(gradient_colour(HEAT, 100), "#f2384c")
-        self.assertEqual(gradient_colour(HEAT, 150), "#f2384c")  # clamped hot
+        self.assertEqual(gradient_colour(CPU_GRAD, -5), "#8b0000")  # clamped: deep red
+        self.assertEqual(gradient_colour(CPU_GRAD, 0), "#8b0000")
+        self.assertEqual(gradient_colour(CPU_GRAD, 50), "#be661c")  # halfway: orange
+        self.assertEqual(gradient_colour(CPU_GRAD, 100), "#f2cc38")  # yellow
+        self.assertEqual(gradient_colour(CPU_GRAD, 150), "#f2cc38")  # clamped
         self.assertEqual(gradient_colour(((0, "#000000"), (10, "#ffffff")), 5), "#808080")  # midpoint
 
     def test_spark_grad_validation(self) -> None:

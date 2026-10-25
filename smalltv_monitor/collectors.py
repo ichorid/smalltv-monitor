@@ -27,6 +27,7 @@ log = logging.getLogger(__name__)
 
 GIB = 1024**3
 MIB = 1024**2
+MB = 1000**2
 
 
 class SourceUnavailable(Exception):
@@ -126,22 +127,29 @@ class DiskCollector(Collector):
 
 
 class DiskIoCollector(Collector):
-    """Read and write throughput, summed over the physical disks.
+    """Read and write throughput in MB/s (10^6 bytes), summed over the configured block devices.
 
-    Only block devices with a `device` link in sysfs count: partitions, loop devices (snaps) and
-    device-mapper layers would count the same bytes twice.
+    With no devices configured, every physical disk counts: those with a `device` link in sysfs, since
+    partitions, loop devices (snaps) and device-mapper layers would count the same bytes twice.
     """
 
     name = "diskio"
 
-    def __init__(self, interval: float, block_dir: str = "/sys/block") -> None:
+    def __init__(self, interval: float, disks: Sequence[str] = (), block_dir: str = "/sys/block") -> None:
         self.interval = interval
+        self.disks = list(disks)
         self.block_dir = block_dir
         self._last: tuple[float, int, int] | None = None
 
     def _totals(self) -> tuple[int, int, list[str]]:
         counters = psutil.disk_io_counters(perdisk=True) or {}
-        disks = sorted(n for n in counters if os.path.exists(os.path.join(self.block_dir, n, "device")))
+        if self.disks:
+            missing = [n for n in self.disks if n not in counters]
+            if missing:
+                raise SourceUnavailable(f"block device not found: {', '.join(missing)}")
+            disks = self.disks
+        else:
+            disks = sorted(n for n in counters if os.path.exists(os.path.join(self.block_dir, n, "device")))
         if not disks:
             raise SourceUnavailable("no physical disks in disk_io_counters")
         return sum(counters[n].read_bytes for n in disks), sum(counters[n].write_bytes for n in disks), disks
@@ -159,8 +167,8 @@ class DiskIoCollector(Collector):
         elapsed = now - last[0]
         # A disk that disappeared makes the totals drop: report 0 rather than a negative rate
         return {
-            "read_mib_s": max(0, read - last[1]) / MIB / elapsed,
-            "write_mib_s": max(0, written - last[2]) / MIB / elapsed,
+            "read_mb_s": max(0, read - last[1]) / MB / elapsed,
+            "write_mb_s": max(0, written - last[2]) / MB / elapsed,
             "disks": disks,
         }
 

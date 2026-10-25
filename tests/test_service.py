@@ -288,12 +288,12 @@ class DiskIoCollectorTest(unittest.TestCase):
 
     @staticmethod
     def counters(read: int, written: int) -> dict[str, SimpleNamespace]:
-        mib = 1024**2
+        mb = 1000**2
         return {
-            "nvme0n1": SimpleNamespace(read_bytes=read * mib, write_bytes=written * mib),
-            "nvme0n1p1": SimpleNamespace(read_bytes=read * mib, write_bytes=written * mib),  # partition: same bytes
-            "sda": SimpleNamespace(read_bytes=read * mib, write_bytes=0),
-            "loop0": SimpleNamespace(read_bytes=999 * mib, write_bytes=999 * mib),
+            "nvme0n1": SimpleNamespace(read_bytes=read * mb, write_bytes=written * mb),
+            "nvme0n1p1": SimpleNamespace(read_bytes=read * mb, write_bytes=written * mb),  # partition: same bytes
+            "sda": SimpleNamespace(read_bytes=read * mb, write_bytes=0),
+            "loop0": SimpleNamespace(read_bytes=999 * mb, write_bytes=999 * mb),
         }
 
     def test_rates_over_physical_disks_only(self) -> None:
@@ -305,11 +305,28 @@ class DiskIoCollectorTest(unittest.TestCase):
             io.return_value = self.counters(30, 10)
             out = collector.collect()
             self.assertEqual(out["disks"], ["nvme0n1", "sda"])
-            self.assertAlmostEqual(out["read_mib_s"], 20.0)  # (20 + 20) MiB over 2 s
-            self.assertAlmostEqual(out["write_mib_s"], 3.0)  # 6 MiB over 2 s
+            self.assertAlmostEqual(out["read_mb_s"], 20.0)  # (20 + 20) MB over 2 s
+            self.assertAlmostEqual(out["write_mb_s"], 3.0)  # 6 MB over 2 s
             io.return_value = self.counters(1, 1)  # a disk went away: totals drop
             out = collector.collect()
-            self.assertEqual((out["read_mib_s"], out["write_mib_s"]), (0.0, 0.0))
+            self.assertEqual((out["read_mb_s"], out["write_mb_s"]), (0.0, 0.0))
+
+    def test_configured_disks_only(self) -> None:
+        collector = DiskIoCollector(interval=1.0, disks=["nvme0n1"], block_dir=str(self.block))
+        clock = iter([100.0, 101.0])
+        with mock.patch("psutil.disk_io_counters") as io, mock.patch("time.monotonic", lambda: next(clock)):
+            io.return_value = self.counters(10, 4)
+            collector.open()
+            io.return_value = self.counters(30, 10)
+            out = collector.collect()
+        self.assertEqual(out["disks"], ["nvme0n1"])
+        self.assertEqual((out["read_mb_s"], out["write_mb_s"]), (20.0, 6.0))  # sda's reads not counted
+
+    def test_configured_disk_missing_is_unavailable(self) -> None:
+        collector = DiskIoCollector(interval=1.0, disks=["nvme1n1"], block_dir=str(self.block))
+        with mock.patch("psutil.disk_io_counters", return_value=self.counters(1, 1)):
+            with self.assertRaisesRegex(SourceUnavailable, "nvme1n1"):
+                collector.open()
 
     def test_no_physical_disk_is_unavailable(self) -> None:
         collector = DiskIoCollector(interval=1.0, block_dir=str(self.block / "missing"))

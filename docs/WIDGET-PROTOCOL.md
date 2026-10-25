@@ -27,7 +27,7 @@ Why this is affordable (measured in `docs/GFX-LAB.md`):
 ## Request
 
 ```
-GET /v1/display?fw=1.5.0-w2&heap=24512&blk=23900&up=86400&rssi=-61&err=0
+GET /v1/display?fw=1.5.0-w3&heap=24512&blk=23900&up=86400&rssi=-61&err=0
 ```
 
 The query string reports device health the PC can't see today: free heap, largest block, uptime,
@@ -187,7 +187,7 @@ streaming parse + per-widget hash) and leaves ≥ 15 KB free heap; 7–10 KB scr
 |---|---|---|
 | **Response size** | **4096 bytes** (compact JSON) | ~10 KB peak while parsed (≈ 2.3× the JSON). Checked against `Content-Length` *before* parsing; larger → rejected, `err=2` |
 | Parsing | Streamed from the socket, no body buffer | ~4 KB less peak heap than buffering, same speed |
-| Widgets | 32 | Fixed table of id hash, rect hash, content hash (12 B each) |
+| Widgets | 40 (32 before firmware `-w3`) | Fixed table of id hash, rect hash, content hash (12 B each) |
 | Bars per `bars` widget | 32 | |
 | Segments per bar or ring | 4 | |
 | Spark samples | 120 | |

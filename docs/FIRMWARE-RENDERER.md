@@ -62,13 +62,13 @@ glyph; the renderer reads its advance after loading, because TFT_eSPI otherwise 
 
 Every `screen.poll_ms` (default 1000, clamped to 250–60 000):
 
-1. `GET DISPLAY_URL?fw=<git describe>-w2&heap=&blk=&up=&rssi=&err=` over HTTP/1.0 (`useHTTP10`), 800 ms timeout.
+1. `GET DISPLAY_URL?fw=<git describe>-w3&heap=&blk=&up=&rssi=&err=` over HTTP/1.0 (`useHTTP10`), 800 ms timeout.
 2. No 200 response → transport failure. 200 → `Content-Length` checked **before** parsing: missing or
    > 4096 → `err=2`, previous frame kept.
 3. Streaming parse from the socket through a reader that stops at `Content-Length` (a lying server cannot
    make it read more), into a `JsonDocument` whose allocator refuses any block that would leave less than
    6 KB of free heap (→ `NoMemory`, `err=4`, no crash, no restart).
-4. Validation (`WidgetModel.cpp`): `proto == 1`, screen fields, ≤ 32 widgets, unique non-empty ids, known
+4. Validation (`WidgetModel.cpp`): `proto == 1`, screen fields, ≤ 40 widgets (32 before `-w3`), unique non-empty ids, known
    types, integer rects inside 240×240, no overlaps, fonts 0–2, `#rrggbb` colours, strings ≤ 31 characters
    (code points), ≤ 4 segments, ≤ 32 bars, ≤ 120 numeric spark samples, `dp` 0–4, `a`/`dir`/`show` enums,
    `max > 0` (spark: `max > min`). Unknown extra fields are ignored. Any violation → keep the previous frame,

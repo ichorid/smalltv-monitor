@@ -12,6 +12,11 @@ allow = ["auto"]
 interval = 1.0        # seconds between CPU / RAM / GPU samples
 disk_interval = 10.0  # disk usage changes slowly
 disk_paths = ["/", "/home"]  # first entry feeds disk_used_* in /metrics; "/" and "/home" are on the display
+# Disk I/O sparkline (right half of the CPU row)
+io_disks = []              # block devices to sum, e.g. ["nvme0n1"]; [] = every physical disk (lsblk -d)
+io_max_read_mb_s = 0.0     # full height of the read area in MB/s, e.g. the disk's measured bandwidth;
+io_max_write_mb_s = 0.0    # 0 = scale to the busiest moment shown (at least 10 MB/s)
+io_scale = "log"           # height ~ log(1 + MB/s): 1 MB/s and 1 GB/s both visible; or "linear"
 gpu = "nvidia"        # "nvidia" (NVML) or "none"
 gpu_index = 0
 stale_after = 5.0     # grace beyond each source's interval before it is reported unavailable

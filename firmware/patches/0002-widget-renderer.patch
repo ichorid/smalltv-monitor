@@ -79,7 +79,7 @@ index 0000000..de2fd06
 +};
 diff --git a/include/renderer/WidgetModel.h b/include/renderer/WidgetModel.h
 new file mode 100644
-index 0000000..b008ac6
+index 0000000..5dfaf72
 --- /dev/null
 +++ b/include/renderer/WidgetModel.h
 @@ -0,0 +1,257 @@
@@ -99,7 +99,7 @@ index 0000000..b008ac6
 +constexpr int16_t SCREEN_W = 240;
 +constexpr int16_t SCREEN_H = 240;
 +constexpr int32_t MAX_BODY_BYTES = 4096;
-+constexpr size_t MAX_WIDGETS = 32;
++constexpr size_t MAX_WIDGETS = 40;
 +constexpr size_t MAX_BARS = 32;
 +constexpr size_t MAX_SEGMENTS = 4;
 +constexpr size_t MAX_SPARK = 120;
@@ -924,7 +924,7 @@ index 0000000..ba396ea
 +#endif
 diff --git a/src/renderer/RendererManager.cpp b/src/renderer/RendererManager.cpp
 new file mode 100644
-index 0000000..a5512da
+index 0000000..3617b04
 --- /dev/null
 +++ b/src/renderer/RendererManager.cpp
 @@ -0,0 +1,314 @@
@@ -972,7 +972,7 @@ index 0000000..a5512da
 +constexpr size_t FW_SIZE = 48;
 +constexpr size_t LOG_SIZE = 96;
 +constexpr int UNKNOWN_BRIGHTNESS = -1;
-+constexpr const char* FW_SUFFIX = "-w2";  // widget protocol v1, spark `u` series
++constexpr const char* FW_SUFFIX = "-w3";  // widget protocol v1, spark `u` series, 40 widgets
 +constexpr uint32_t INCOMPLETE_MARK = 1;
 +
 +// Refuses allocations that would eat into PARSE_HEAP_RESERVE; ArduinoJson then reports NoMemory
@@ -7470,10 +7470,10 @@ index 0000000..b317e4a
 +"$out/widget_model_test"
 diff --git a/test/host/widget_model_test.cpp b/test/host/widget_model_test.cpp
 new file mode 100644
-index 0000000..c43f261
+index 0000000..1d251c5
 --- /dev/null
 +++ b/test/host/widget_model_test.cpp
-@@ -0,0 +1,442 @@
+@@ -0,0 +1,445 @@
 +// SPDX-License-Identifier: GPL-3.0-or-later
 +// Host test for src/renderer/WidgetModel.cpp: g++ only, no Arduino. Run test/host/run.sh.
 +#include <cmath>
@@ -7684,13 +7684,16 @@ index 0000000..c43f261
 +    EXPECT(codeOf(one(R"({"id":"a","t":"value","r":[0,0,100,10],"label":7,"v":1})")) == ErrorCode::Field);
 +    EXPECT(codeOf(one(R"({"id":"a","t":"icon","r":[0,0,16,16],"v":"warn"})")) == ErrorCode::None);
 +
-+    std::string many = R"({"proto":1,"w":[)";
-+    for (int i = 0; i < 33; ++i) {
-+        many += (i == 0 ? "" : ",");
-+        many += R"({"id":"w)" + std::to_string(i) + R"(","t":"text","r":[)" + std::to_string(i * 7) +
-+                ",0,7,7]}";
-+    }
-+    EXPECT(codeOf(many + "]}") == ErrorCode::Widgets);
++    const auto widgetsOf = [](size_t count) {
++        std::string doc = R"({"proto":1,"w":[)";
++        for (size_t i = 0; i < count; ++i) {
++            doc += (i == 0 ? "" : ",");
++            doc += R"({"id":"w)" + std::to_string(i) + R"(","t":"text","r":[)" + std::to_string(i * 5) + ",0,5,5]}";
++        }
++        return doc + "]}";
++    };
++    EXPECT(codeOf(widgetsOf(renderer::MAX_WIDGETS)) == ErrorCode::None);
++    EXPECT(codeOf(widgetsOf(renderer::MAX_WIDGETS + 1)) == ErrorCode::Widgets);
 +
 +    // The offending widget index is reported
 +    Frame frame;
