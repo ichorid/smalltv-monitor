@@ -1,0 +1,21 @@
+# Template: scripts/install.sh replaces @ROOT@ with this checkout's path.
+[Unit]
+Description=SmallTV-Ultra workstation metrics service (GET /metrics on :8765)
+Documentation=file://@ROOT@/README.md
+
+[Service]
+Type=exec
+WorkingDirectory=@ROOT@
+ExecStart=@ROOT@/.venv/bin/python -m smalltv_monitor
+Restart=always
+RestartSec=3
+Environment=PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
+TimeoutStopSec=10
+Nice=5
+MemoryMax=128M
+NoNewPrivileges=yes
+
+[Install]
+# A user unit: starts with your login session, stops when your last session ends.
+# (Running without a login would need `loginctl enable-linger`, deliberately not done.)
+WantedBy=default.target

@@ -1,0 +1,35 @@
+# Copy to ~/.config/smalltv-monitor/config.toml to override defaults. Every key is optional.
+
+# Addresses to listen on. "auto" = the LAN address carrying the default route (detected at start).
+# Loopback is kept for local tools. Use "0.0.0.0" to listen everywhere (rely on ufw then).
+bind = ["auto", "127.0.0.1"]
+port = 8765
+
+# Clients allowed by the service itself (defence in depth on top of ufw).
+# "auto" = loopback + the subnet of each bound address. [] = no app-level filtering.
+allow = ["auto"]
+
+interval = 1.0        # seconds between CPU / RAM / GPU samples
+disk_interval = 10.0  # disk usage changes slowly
+disk_paths = ["/", "/home"]  # first entry feeds disk_used_* in /metrics; "/" and "/home" are on the display
+gpu = "nvidia"        # "nvidia" (NVML) or "none"
+gpu_index = 0
+stale_after = 5.0     # grace beyond each source's interval before it is reported unavailable
+log_level = "INFO"
+
+# /v1/display (widget-renderer firmware)
+title = ""            # header text; empty = hostname
+day_bri = 80          # backlight 0..100
+night_bri = 10
+night_start = "22:00"
+night_end = "07:00"
+
+# AI usage limits from Alloy's cache (~/.alloy/limits.json, refreshed by the Alloy monitor)
+limits_interval = 30.0
+alloy_limits_cache = ""   # empty = $ALLOY_ROOT/limits.json or ~/.alloy/limits.json
+alloy_refresh_cmd = ["alloy", "limits", "--json"]  # run when the cache is stale (full path if not on PATH, ~ ok); [] = never
+alloy_refresh_after = 300.0
+
+# Slack red dot (mention/DM) from Slack's tray icon; needs the Slack desktop app running
+slack = true
+slack_interval = 2.0

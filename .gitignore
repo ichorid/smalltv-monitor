@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+*.pyc
+device-backup/
+
+# Site settings (addresses, Wi-Fi network): template in .env.example
+.env
+
+# No binaries in the repository. Firmware images stay local: they have the workstation's address compiled
+# in, and are rebuilt with firmware/build-firmware.sh. Previews are rendered with scripts/preview.py.
+firmware/releases/
+*.bin
+*.elf
+*.png
+*.ico

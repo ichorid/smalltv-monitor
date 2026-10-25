@@ -1,0 +1,2 @@
+pillow>=11
+cairosvg>=2.7

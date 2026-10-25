@@ -1,0 +1,104 @@
+diff --git a/src/dashboard/DashboardManager.cpp b/src/dashboard/DashboardManager.cpp
+index 5230bb4..c68e231 100644
+--- a/src/dashboard/DashboardManager.cpp
++++ b/src/dashboard/DashboardManager.cpp
+@@ -13,6 +13,8 @@
+ namespace {
+ constexpr uint32_t FETCH_INTERVAL_MS = 1000;
+ constexpr uint16_t FETCH_TIMEOUT_MS = 800;
++// A single lost poll (Wi-Fi retry, slow reply) must not flash the full-screen offline view
++constexpr uint8_t OFFLINE_AFTER_FAILURES = 3;
+ constexpr size_t TILE_COUNT = 6;
+ constexpr size_t VALUE_TEXT_SIZE = 12;
+ constexpr uint16_t COLOR_BG = 0x0841;
+@@ -29,6 +31,7 @@ constexpr uint16_t COLOR_TEMP = 0x3DDF;
+ 
+ String metricsUrl;
+ uint32_t lastFetch = 0;
++uint8_t consecutiveFailures = 0;
+ bool offlineDrawn = false;
+ bool dashboardDrawn = false;
+ std::array<std::array<char, VALUE_TEXT_SIZE>, TILE_COUNT> lastValues{};
+@@ -180,11 +183,15 @@ void DashboardManager::update() {
+     }
+     lastFetch = now;
+     if (!fetchMetrics()) {
+-        if (!offlineDrawn) {
++        if (consecutiveFailures < OFFLINE_AFTER_FAILURES) {
++            consecutiveFailures++;
++        }
++        if (consecutiveFailures >= OFFLINE_AFTER_FAILURES && !offlineDrawn) {
+             drawOffline();
+         }
+         return;
+     }
++    consecutiveFailures = 0;
+     offlineDrawn = false;
+     if (!dashboardDrawn) {
+         drawDashboardFrame();
+diff --git a/src/main.cpp b/src/main.cpp
+index ac84e78..db8ee0c 100644
+--- a/src/main.cpp
++++ b/src/main.cpp
+@@ -147,6 +147,11 @@ void setup() {
+     DisplayManager::drawLoadingBar((float)step / TOTAL_STEPS, LOADING_BAR_Y);
+     step++;
+ 
++#ifdef WIFI_FALLBACK_REBOOT_MS
++    // Credentials live in SecureStorage; keep the SDK from rewriting its flash copy on every STA/AP
++    // mode flip, which the fallback reboot would otherwise cause on each retry
++    WiFi.persistent(false);
++#endif
+     wifiManager = new WiFiManager(configManager.getSSID(), configManager.getPassword(), AP_SSID, AP_PASSWORD);
+     wifiManager->begin();
+ 
+@@ -181,10 +186,6 @@ void setup() {
+ 
+     DisplayManager::drawStartup(wifiManager->getIP().toString());
+ 
+-    if (METRICS_ENDPOINT[0] != '\0' && WiFiManager::isConnected() && !wifiManager->isApMode()) {
+-        DashboardManager::begin(METRICS_ENDPOINT);
+-    }
+-
+     // enable watchdog before going to loop()
+     // 2 seconds should be way more than the main loop needs to do stuff
+     EspClass::wdtEnable(WDTO_2S);
+@@ -212,8 +213,14 @@ void loop() {
+ 
+     DisplayManager::update();
+ 
+-    if (METRICS_ENDPOINT[0] != '\0' && wifiManager != nullptr && WiFiManager::isConnected() &&
+-        !wifiManager->isApMode()) {
++    // Keep polling while Wi-Fi is down so the dashboard shows PC OFFLINE instead of frozen values;
++    // start lazily so STA mode reached after boot (Wi-Fi set up from AP mode) also gets the dashboard
++    if (METRICS_ENDPOINT[0] != '\0' && wifiManager != nullptr && !wifiManager->isApMode()) {
++        static bool dashboardStarted = false;
++        if (!dashboardStarted) {
++            DashboardManager::begin(METRICS_ENDPOINT);
++            dashboardStarted = true;
++        }
+         DashboardManager::update();
+     }
+ 
+@@ -221,6 +228,21 @@ void loop() {
+     static constexpr unsigned long FREE_HEAP_LOG_INTERVAL_MS = 10000UL;
+     unsigned long now = millis();
+ 
++#ifdef WIFI_FALLBACK_REBOOT_MS
++    static_assert(WIFI_FALLBACK_REBOOT_MS > BOOT_STABLE_MS, "earlier reboots would be counted as a boot loop");
++    // A failed STA connect at boot (e.g. router still starting after a power cut) leaves the device in
++    // AP mode for good. With credentials configured, reboot to retry, unless someone is using the AP.
++    static unsigned long apIdleSince = 0;
++    if (wifiManager != nullptr && wifiManager->isApMode() && configManager.getSSID()[0] != '\0') {
++        if (WiFi.softAPgetStationNum() > 0) {
++            apIdleSince = now;
++        } else if (now - apIdleSince >= WIFI_FALLBACK_REBOOT_MS) {
++            Logger::warn("Station connect failed at boot and AP unused, rebooting to retry", "Global");
++            ESP.restart();  // NOLINT(readability-static-accessed-through-instance)
++        }
++    }
++#endif
++
+     if (now - last_free_heap_log >= FREE_HEAP_LOG_INTERVAL_MS) {
+         last_free_heap_log = now;
+         char freeBuf[FREE_BUF_SIZE];
