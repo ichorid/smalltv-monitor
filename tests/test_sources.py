@@ -10,6 +10,7 @@ import time
 import unittest
 import zlib
 from pathlib import Path
+from unittest import mock
 
 from smalltv_monitor.agent_limits import AgentLimitsCollector
 from smalltv_monitor.collectors import SourceUnavailable
@@ -74,6 +75,13 @@ class AgentLimitsTest(unittest.TestCase):
         collector.collect()
         collector.collect()  # rate-limited: at most once per refresh_after
         self.assertEqual(marker.read_text().count("x"), 1)
+
+    def test_refreshes_right_after_boot(self) -> None:
+        marker = Path(self.tmp.name) / "ran"
+        self.write(CACHE, age=600)
+        with mock.patch("smalltv_monitor.agent_limits.time.monotonic", return_value=12.0):  # 12 s of uptime
+            AgentLimitsCollector(30, self.cache, ["sh", "-c", f"echo x >> {marker}"], refresh_after=300).collect()
+        self.assertTrue(marker.exists())
 
 
 def make_png(width: int, height: int, pixels: list[tuple[int, int, int, int]]) -> bytes:

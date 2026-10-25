@@ -49,7 +49,7 @@ class AgentLimitsCollector(Collector):
         self.refresh_cmd = list(refresh_cmd) if refresh_cmd else None
         self.refresh_after = refresh_after
         self.refresh_timeout = refresh_timeout
-        self._last_refresh = 0.0
+        self._last_refresh = float("-inf")  # never: monotonic time starts near 0 at boot
         self._last_good: dict[str, dict[str, Any]] = {}
 
     def collect(self) -> dict[str, Any]:

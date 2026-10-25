@@ -148,6 +148,14 @@ class NvidiaGpuCollectorTest(unittest.TestCase):
         self.assertEqual(data["power_limit_w"], 300.0)
         self.assertEqual(nv.nvmlDeviceGetMemoryInfo.call_args.kwargs, {"version": nv.nvmlMemory_v2})
 
+    def test_power_limit_follows_changes(self) -> None:
+        nv = fake_nvml()
+        gpu = self.make(nv)
+        self.assertEqual(gpu.collect()["power_limit_w"], 300.0)
+        nv.nvmlDeviceGetEnforcedPowerLimit.return_value = 140000  # e.g. `nvidia-smi -pl 140` while running
+        self.assertEqual(gpu.collect()["power_limit_w"], 140.0)
+        self.assertEqual(nv.nvmlInit.call_count, 1)  # no reconnect needed
+
     def test_init_failure_backs_off_then_recovers(self) -> None:
         nv = fake_nvml(nvmlInit=mock.Mock(side_effect=FakeNVMLError("RM has detected an NVML/RM version mismatch")))
         gpu = self.make(nv)

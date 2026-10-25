@@ -12,7 +12,7 @@ Device: SmallTV-Ultra, factory `Ultra-V9.0.50`. Addresses: `<pc-ip>` = workstati
 | CPU plausible: idle vs `vmstat`; 16-core busy-loop load | ✅ 99.6–99.9 % under load vs `vmstat` 100 % |
 | RAM vs `/proc/meminfo` (total − available) | ✅ within 0.04 GiB over 25 samples |
 | Disk usage collected (`/`) | ✅ 90.0 % (83.6 of 97.9 GiB). Note: root is nearly full |
-| GPU util / VRAM / temp / power vs `nvidia-smi` | ⚠️ **NOT VERIFIED**: `nvidia-smi` itself fails with *Driver/library version mismatch* (kernel module and userspace library versions differ after a driver update; reboot pending). Reading code is unit-tested against a fake NVML. Re-run `scripts/verify.py` after rebooting. |
+| GPU util / VRAM / temp / power vs `nvidia-smi` | ✅ after the reboot that cleared the driver/library mismatch (2026-10-25, `scripts/verify.py`): VRAM within 1 MiB, temp 0 °C, power 0.0 W, util 0 % max difference over 5 samples |
 | GPU-failure path | ✅ live: `ok:true`, GPU fields `null`, `gpu_ok:false`, one log line, NVML retried with 1→30 s backoff |
 | Latency (LAN address, 1000 sequential) | ✅ p50 0.50 ms, p99 1.05 ms, max 4.35 ms (firmware timeout 800 ms) |
 | Burst: 5000 req from 16 / 64 concurrent clients | ✅ 100 % / 99.1 % 200s (rest shed by the concurrency cap by design); ~3700 req/s; RSS flat; still serving |
@@ -55,7 +55,7 @@ disk fields flickered to `null`. Freshness is now per source (interval + 5 s gra
 | Wi-Fi drop / AP restart recovery | ⚠️ not tested: would interrupt every client of the household AP. Test by reloading the AP's Wi-Fi when convenient |
 | Device free heap over time | ⚠️ not observable: the open firmware logs heap to serial only (`/api/v1/logs` keeps warnings). Stability judged from poll gaps |
 | Sustained operation | ✅ 30 min: 1800 polls (1.00/s), 0 gaps > 3 s, longest silence 1.0 s, so no reboots or hangs (`scripts/watch-display.py`) |
-| GPU tiles | ⚠️ show 0 until the workstation reboots (NVML driver/library mismatch, see above) |
+| GPU tiles | ✅ live after the reboot; power limit shown is the enforced one, re-read every sample (follows `nvidia-smi -pl`) |
 
 ## Widget renderer (2026-10-25)
 

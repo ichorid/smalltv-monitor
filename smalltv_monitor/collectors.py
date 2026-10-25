@@ -215,6 +215,8 @@ class NvidiaGpuCollector(Collector):
                 mem = nv.nvmlDeviceGetMemoryInfo(handle)
             temp = self._optional(lambda: nv.nvmlDeviceGetTemperature(handle, nv.NVML_TEMPERATURE_GPU))
             power_mw = self._optional(lambda: nv.nvmlDeviceGetPowerUsage(handle))
+            # Read every sample: the limit can be changed at any time (nvidia-smi -pl)
+            limit_mw = self._optional(lambda: nv.nvmlDeviceGetEnforcedPowerLimit(handle))
         except nv.NVMLError as exc:
             # Driver reload, GPU reset, Xid error...: start over with a fresh nvmlInit()
             self._disconnect()
@@ -227,6 +229,7 @@ class NvidiaGpuCollector(Collector):
             "mem_total_mib": mem.total / MIB,
             "temp_c": temp,
             "power_w": None if power_mw is None else power_mw / 1000,
+            "power_limit_w": None if limit_mw is None else limit_mw / 1000,
         }
 
     def close(self) -> None:
@@ -243,7 +246,6 @@ class NvidiaGpuCollector(Collector):
             self._initialized = True
             handle = nv.nvmlDeviceGetHandleByIndex(self.index)
             name = nv.nvmlDeviceGetName(handle)
-            limit_mw = self._optional(lambda: nv.nvmlDeviceGetEnforcedPowerLimit(handle))
             self._memory_version = self._probe_memory_v2(handle)
         except nv.NVMLError as exc:
             self._disconnect()
@@ -253,7 +255,6 @@ class NvidiaGpuCollector(Collector):
         self._static = {
             "index": self.index,
             "name": name.decode() if isinstance(name, bytes) else name,
-            "power_limit_w": None if limit_mw is None else limit_mw / 1000,
         }
         self._backoff = 1.0
         log.info("gpu: connected to %s (index %d) via NVML", self._static["name"], self.index)
