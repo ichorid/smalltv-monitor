@@ -169,13 +169,20 @@ def draw_bars(d: ImageDraw.ImageDraw, w: dict[str, Any], width: int, height: int
 
 
 def draw_spark(d: ImageDraw.ImageDraw, w: dict[str, Any], width: int, height: int) -> None:
-    samples = w.get("v") or []
+    samples, under = w.get("v") or [], w.get("u") or []
+    lo, hi = w.get("min", 0), w.get("max", max([*samples, *under, 0]))  # device default: largest sample
+    span = (hi - lo) or 1
+
+    def points(series: list[float]) -> list[tuple[float, float]]:
+        step = (width - 1) / (len(series) - 1)
+        return [(i * step * SS, (height - 1 - (max(lo, min(hi, s)) - lo) / span * (height - 1)) * SS)
+                for i, s in enumerate(series)]
+
+    if len(under) >= 2:  # second series: a solid area underneath the main one
+        d.polygon([(0, height * SS), *points(under), ((width - 1) * SS, height * SS)], fill=rgb(w.get("uc", "#ffffff")))
     if len(samples) < 2:
         return
-    lo, hi = w.get("min", 0), w.get("max", max(samples))  # device default: largest sample
-    span = (hi - lo) or 1
-    step = (width - 1) / (len(samples) - 1)
-    pts = [(i * step * SS, (height - (max(lo, min(hi, s)) - lo) / span * (height - 1)) * SS) for i, s in enumerate(samples)]
+    pts = points(samples)
     area = [(0, height * SS), *pts, ((width - 1) * SS, height * SS)]
     if not w.get("grad"):
         if w.get("fill"):
@@ -257,16 +264,19 @@ def render(doc: dict[str, Any]) -> Image.Image:
 
 def demo_screen() -> dict[str, Any]:
     """The default dashboard composed from fixed sample data (GPU included)."""
-    from smalltv_monitor.display.dashboard import DashboardComposer
+    from smalltv_monitor.display.dashboard import DashboardComposer, track_history
     from smalltv_monitor.display.history import History
     from smalltv_monitor.display.policy import NightSchedule
     from smalltv_monitor.store import SnapshotStore
 
     store, history = SnapshotStore(), History()
-    history.track("cpu", "cpu", lambda d: d["percent"])
+    track_history(history)
     store.add_listener(history.on_sample)
-    for i in range(60):
+    for i in range(98):
         store.put("cpu", {"percent": 30 + 25 * math.sin(i / 7) ** 2, "user": 0, "system": 0, "per_core": []}, 60)
+        # A write burst, then a long read with writes underneath
+        store.put("diskio", {"read_mib_s": 60 * math.sin((i - 40) / 18) ** 2 if 40 <= i < 95 else 0.3,
+                             "write_mib_s": 45 * math.exp(-((i - 22) / 8) ** 2) + 12 * (60 <= i < 90) + 0.5}, 60)
     store.put("cpu", {"percent": 41.0, "user": 33.5, "system": 7.5, "count": 16, "load1": 4.2,
                       "per_core": [12, 35, 96, 8, 41, 22, 67, 5, 30, 18, 91, 14, 52, 9, 26, 44]}, 60)
     store.put("memory", {"used_gib": 28.6, "cache_gib": 22.3, "total_gib": 61.6, "percent": 46.4,

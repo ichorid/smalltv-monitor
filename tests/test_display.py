@@ -7,7 +7,7 @@ import time
 import unittest
 from datetime import UTC, datetime, time as dtime
 
-from smalltv_monitor.display.dashboard import DashboardComposer
+from smalltv_monitor.display.dashboard import DashboardComposer, track_history
 from smalltv_monitor.display.history import History
 from smalltv_monitor.display.icons import ICON_HASH, ICONS, decode_rgba, fnv1a32
 from smalltv_monitor.display.policy import NightSchedule, parse_hhmm
@@ -90,6 +90,14 @@ class ScreenTest(unittest.TestCase):
         self.assertLessEqual(len(body), MAX_BYTES)
         self.assertTrue(all(len(w["v"]) <= 120 for w in json.loads(body)["w"]))
 
+    def test_fit_trims_both_series_of_a_spark(self) -> None:
+        sparks = [Spark(id=f"s{i}", r=(0, i * 30, 240, 30), v=[100] * 120, u=[50] * 120) for i in range(8)]
+        body = screen_of(*sparks).fit()
+        self.assertLessEqual(len(body), MAX_BYTES)
+        widgets = json.loads(body)["w"]
+        self.assertTrue(any(len(w["u"]) < 120 for w in widgets))
+        self.assertTrue(all(len(w["u"]) == len(w["v"]) for w in widgets))  # trimmed together, newest kept
+
     def test_fit_gives_up_when_nothing_to_trim(self) -> None:
         texts = [Text(id=f"t{i:02d}", r=(0, i * 7, 240, 7), text="x" * 31, tc="#ffffff", lc="#ffffff", bg="#000000")
                  for i in range(32)]
@@ -123,7 +131,7 @@ class ComposerTest(unittest.TestCase):
 
     def setUp(self) -> None:
         self.store, self.history = SnapshotStore(), History()
-        self.history.track("cpu", "cpu", lambda d: d["percent"])
+        track_history(self.history)
         self.store.add_listener(self.history.on_sample)
         self.composer = DashboardComposer(self.store, self.history, NightSchedule(), title="workstation")
 
@@ -163,6 +171,25 @@ class ComposerTest(unittest.TestCase):
         self.assertEqual(w["gpow"]["v"], ["250/300W", "#f2cc38"])
         self.assertEqual(w["gvram"]["v"], ["15G", "#f2384c"])  # > 90 % used
         self.assertEqual(w["cpuh"]["v"], [41])
+        self.assertEqual(w["cpuh"]["r"], [30, 104, 60, 34])  # left half of the row, with the number
+        self.assertEqual(w["io"]["r"], [134, 104, 98, 34])  # right half: disk I/O
+        self.assertIsNone(w["io"]["v"])  # no diskio sample yet
+
+    def test_disk_io_sparkline(self) -> None:
+        for read, write in ((0.0, 0.0), (2.0, 5.0), (40.0, 10.0)):
+            self.store.put("diskio", {"read_mib_s": read, "write_mib_s": write, "disks": ["sda"]}, 60)
+        io = self.widgets()[1]["io"]
+        # Reads (main series, green area) drawn over writes (u, red area); both scaled so the busiest sample
+        # shown (40 MiB/s) is the top pixel row (33 of a 34 px rect)
+        self.assertEqual((io["c"], io["fill"], io["uc"], io["max"]), ("#3fb950", "#3fb950", "#f2384c", 33))
+        self.assertEqual(io["v"], [0, 2, 33])
+        self.assertEqual(io["u"], [0, 4, 8])
+        self.assertNotIn("grad", io)
+
+    def test_disk_io_scale_has_a_floor(self) -> None:
+        self.store.put("diskio", {"read_mib_s": 0.5, "write_mib_s": 1.0, "disks": ["sda"]}, 60)
+        io = self.widgets()[1]["io"]
+        self.assertEqual((io["v"], io["u"]), ([2], [3]))  # scaled to 10 MiB/s, not to the 1 MiB/s peak
 
     def test_no_data_at_all(self) -> None:
         doc, w = self.widgets(datetime(2026, 1, 1, 23, 0).astimezone())  # 23:00 local
@@ -270,6 +297,17 @@ class GradientTest(unittest.TestCase):
                     [(0, "#000000"), (1, "blue")]):
             with self.subTest(bad=bad), self.assertRaises(LayoutError):
                 Spark(id="s", r=(0, 0, 50, 20), v=[1], grad=bad).to_json()
+
+    def test_spark_under_series(self) -> None:
+        ok = Spark(id="s", r=(0, 0, 50, 20), v=[1.4, 2], u=[3, 4.6], uc="#f2384c").to_json()
+        self.assertEqual((ok["v"], ok["u"], ok["uc"]), ([1, 2], [3, 5], "#f2384c"))
+        self.assertNotIn("u", Spark(id="s", r=(0, 0, 50, 20), v=[1]).to_json())
+        with self.assertRaisesRegex(LayoutError, "grad"):
+            Spark(id="s", r=(0, 0, 50, 20), v=[1], u=[1], grad=[(0, "#000000"), (1, "#ffffff")]).to_json()
+        with self.assertRaisesRegex(LayoutError, "samples"):
+            Spark(id="s", r=(0, 0, 50, 20), v=[1], u=[1] * 121).to_json()
+        with self.assertRaises(LayoutError):
+            Spark(id="s", r=(0, 0, 50, 20), v=[1], u=[1], uc="red").to_json()
 
 
 if __name__ == "__main__":

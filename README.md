@@ -180,7 +180,8 @@ Rows are marked with 16 px icons ([sources and licences](docs/ICONS.md)); values
 | Slack icon (top right) | Slack's tray icon (`slack.py`) | Slack's own tray image: no dot / blue unread dot / red mention dot. Faint when Slack isn't running. Local only: D-Bus StatusNotifierItem → icon PNG → badge colour. |
 | Claude / Codex 5H, WEEK | Alloy's limits cache (`agent_limits.py`) | **Remaining** allowance: a full green bar = 100 % left. Green from 50 % left, yellow 25–49 %, red below 25 %. Claude via its OAuth usage API, Codex from local session logs. Last good values stay up, coloured the same, while a probe fails (Claude often answers HTTP 429). |
 | Cursor | Alloy's limits cache | Cursor only exposes a billing-cycle percentage (no 5 h / weekly windows): remaining share of the cycle, plus time to reset. |
-| CPU | psutil | Total load sparkline, last 2 minutes, coloured by height from deep red (bottom) to yellow (top). The number goes blue → yellow → red with load. |
+| CPU (left half of the row) | psutil | Total load sparkline, last minute, coloured by height from deep red (bottom) to yellow (top). The number goes blue → yellow → red with load. |
+| Disk I/O (right half of the CPU row) | psutil, physical disks only | Throughput over the last ~100 s: writes as a solid red area, reads drawn over them in solid green. Scaled to the busiest moment shown, at least 10 MiB/s. Needs renderer firmware `-w2` (older firmware draws only the reads). |
 | Memory | psutil | htop's memory meter: used (green), shared (magenta), buffers (blue), cache (yellow); used/total GiB. |
 | Disk | psutil | Free space on `/` and `/home` (mount left, value right); yellow below 10 % free, red below 5 %. |
 | GPU | NVML | Power draw / enforced limit; VRAM used. |

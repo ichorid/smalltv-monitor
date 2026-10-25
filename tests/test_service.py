@@ -5,14 +5,16 @@ from __future__ import annotations
 import http.client
 import ipaddress
 import json
+import tempfile
 import threading
 import time
 import unittest
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-from smalltv_monitor.collectors import CollectorRunner, NvidiaGpuCollector, SourceUnavailable
+from smalltv_monitor.collectors import CollectorRunner, DiskIoCollector, NvidiaGpuCollector, SourceUnavailable
 from smalltv_monitor.server import ClientLog, MetricsHTTPServer, serve_in_thread
 from smalltv_monitor.store import SnapshotStore
 from smalltv_monitor.views import FirmwareMetricsView, StatusView, render_firmware_metrics
@@ -272,6 +274,48 @@ class HTTPServerTest(unittest.TestCase):
         self.server.allowed = [ipaddress.ip_network("10.0.0.0/8")]
         with self.assertRaises((ConnectionError, http.client.HTTPException)):
             self.get("/metrics")
+
+
+
+class DiskIoCollectorTest(unittest.TestCase):
+    def setUp(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.block = Path(tmp.name)
+        for disk in ("nvme0n1", "sda"):  # physical disks have a device link; partitions and loops do not
+            (self.block / disk / "device").mkdir(parents=True)
+        (self.block / "loop0").mkdir()
+
+    @staticmethod
+    def counters(read: int, written: int) -> dict[str, SimpleNamespace]:
+        mib = 1024**2
+        return {
+            "nvme0n1": SimpleNamespace(read_bytes=read * mib, write_bytes=written * mib),
+            "nvme0n1p1": SimpleNamespace(read_bytes=read * mib, write_bytes=written * mib),  # partition: same bytes
+            "sda": SimpleNamespace(read_bytes=read * mib, write_bytes=0),
+            "loop0": SimpleNamespace(read_bytes=999 * mib, write_bytes=999 * mib),
+        }
+
+    def test_rates_over_physical_disks_only(self) -> None:
+        collector = DiskIoCollector(interval=1.0, block_dir=str(self.block))
+        clock = iter([100.0, 102.0, 103.0])
+        with mock.patch("psutil.disk_io_counters") as io, mock.patch("time.monotonic", lambda: next(clock)):
+            io.return_value = self.counters(10, 4)
+            collector.open()
+            io.return_value = self.counters(30, 10)
+            out = collector.collect()
+            self.assertEqual(out["disks"], ["nvme0n1", "sda"])
+            self.assertAlmostEqual(out["read_mib_s"], 20.0)  # (20 + 20) MiB over 2 s
+            self.assertAlmostEqual(out["write_mib_s"], 3.0)  # 6 MiB over 2 s
+            io.return_value = self.counters(1, 1)  # a disk went away: totals drop
+            out = collector.collect()
+            self.assertEqual((out["read_mib_s"], out["write_mib_s"]), (0.0, 0.0))
+
+    def test_no_physical_disk_is_unavailable(self) -> None:
+        collector = DiskIoCollector(interval=1.0, block_dir=str(self.block / "missing"))
+        with mock.patch("psutil.disk_io_counters", return_value=self.counters(1, 1)):
+            with self.assertRaises(SourceUnavailable):
+                collector.open()
 
 
 if __name__ == "__main__":

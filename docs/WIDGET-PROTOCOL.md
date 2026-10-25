@@ -27,7 +27,7 @@ Why this is affordable (measured in `docs/GFX-LAB.md`):
 ## Request
 
 ```
-GET /v1/display?fw=1.5.0-w1&heap=24512&blk=23900&up=86400&rssi=-61&err=0
+GET /v1/display?fw=1.5.0-w2&heap=24512&blk=23900&up=86400&rssi=-61&err=0
 ```
 
 The query string reports device health the PC can't see today: free heap, largest block, uptime,
@@ -76,7 +76,7 @@ Common fields: `id` (unique, stable across polls), `t` (type), `r` (rect), `c` (
 | `bar` | One bar, horizontal or vertical | number, or **segments** | `dir` (h/v), `max`, `track` (colour), `label` (drawn inside the rect: left for h, bottom for v), `radius` (default 0 = straight) |
 | `bars` | N bars side by side in one rect (per-core CPU, histograms) | array; each element a number or segments | `dir`, `max`, `gap`, `track` |
 | `ring` | 270° anti-aliased gauge, number centred, label in the bottom gap | number, or segments | `f`, `max`, `track`, `label`, `show` (`value`/`none`) |
-| `spark` | Sparkline (line + filled area) | array of samples, oldest first (≤ 120) | `max`, `min`, `fill` (colour), `grad` (colour stops), `fa` (gradient fill %) |
+| `spark` | Sparkline (line + filled area) | array of samples, oldest first (≤ 120) | `max`, `min`, `fill` (colour), `grad` (colour stops), `fa` (gradient fill %), `u` (second series, ≤ 120), `uc` (its colour) |
 | `icon` | Small anti-aliased icon served by the PC (see Icons) | icon name | `h` (content hash, required for PC icons) |
 | `panel` | Filled rounded block (decoration, alert background) | none | `radius` |
 
@@ -133,6 +133,11 @@ vertically by font cell, so the PC preview may differ by a pixel or two.
   end colours. Line pixels use their row's colour; fill pixels use their row's colour blended over the
   background at `fa` percent (default 35; 0 = no fill). With `grad`, `c` and `fill` are ignored. Only
   peaks reach the warm rows, so lows stay cold.
+  **Second series** (`u`, firmware `-w2`; older firmware ignores it): drawn first, as a solid area in `uc`
+  (default `#ffffff`) from its line down to the bottom; the main series is then drawn over it (line in `c`,
+  area in `fill` if given), so the main series hides `u` wherever it is as high. Both share `min`/`max`
+  (without `max`: the largest sample of either), each is spread over the full width on its own, `v` may be
+  empty or `null`. Not combined with `grad` (`err` field).
 - `panel`: filled rounded rect, colour `c`, radius `radius` (default 6).
 - `icon`: the bitmap is centred in the rect (not scaled). Mono icons blend `c` over the background with
   alpha a/15; colour icons blend each palette colour with its own alpha. Built-in names `dot`, `warn`, `check` are drawn by the firmware at size min(w, h) and need no `h`.

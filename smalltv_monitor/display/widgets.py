@@ -230,12 +230,18 @@ class Spark(Widget):
     fill: str | None = None
     grad: Sequence[Segment] | None = None  # height gradient stops (value, colour), ascending
     fa: int | None = None  # gradient fill opacity in percent (device default 35)
+    u: Sequence[float] | None = None  # second series, drawn underneath as a solid area (firmware -w2)
+    uc: str | None = None  # its colour
 
     def validate(self) -> None:
         super().validate()
         _check_colour(self.fill, f"{self.id}.fill")
-        if self.v is not None and len(self.v) > MAX_SPARK:
-            raise LayoutError(f"{self.id}: {len(self.v)} samples, max {MAX_SPARK}")
+        _check_colour(self.uc, f"{self.id}.uc")
+        for series in (self.v, self.u):
+            if series is not None and len(series) > MAX_SPARK:
+                raise LayoutError(f"{self.id}: {len(series)} samples, max {MAX_SPARK}")
+        if self.u is not None and self.grad is not None:
+            raise LayoutError(f"{self.id}: u and grad cannot be combined")
         if self.grad is not None:
             values = [v for v, _ in self.grad]
             if not 2 <= len(values) <= 8 or any(b <= a for a, b in zip(values, values[1:])):
@@ -247,9 +253,10 @@ class Spark(Widget):
 
     def fields(self) -> dict[str, Any]:
         samples = None if self.v is None else [round(s) for s in self.v]
+        under = None if self.u is None else [round(s) for s in self.u]
         grad = None if self.grad is None else [[v, c] for v, c in self.grad]
         return {"v": samples, "max": self.max, "min": self.min or None, "fill": self.fill, "grad": grad,
-                "fa": self.fa}
+                "fa": self.fa, "u": under, "uc": self.uc}
 
 
 @dataclass(kw_only=True)

@@ -18,8 +18,9 @@ import psutil
 
 from . import __version__
 from .agent_limits import AgentLimitsCollector, default_cache_path
-from .collectors import Collector, CollectorRunner, CpuCollector, DiskCollector, MemoryCollector, NvidiaGpuCollector
-from .display.dashboard import DashboardComposer
+from .collectors import (Collector, CollectorRunner, CpuCollector, DiskCollector, DiskIoCollector, MemoryCollector,
+                         NvidiaGpuCollector)
+from .display.dashboard import DashboardComposer, track_history
 from .slack import SlackCollector
 from .display.history import History
 from .display.testpattern import test_pattern
@@ -164,6 +165,7 @@ def build_collectors(config: Config) -> list[Collector]:
         CpuCollector(config.interval),
         MemoryCollector(config.interval),
         DiskCollector(config.disk_interval, config.disk_paths),
+        DiskIoCollector(config.interval),
     ]
     if config.gpu == "nvidia":
         collectors.append(NvidiaGpuCollector(config.interval, config.gpu_index))
@@ -190,7 +192,7 @@ def main(argv: list[str] | None = None) -> int:
 
     store = SnapshotStore()
     history = History()
-    history.track("cpu", "cpu", lambda d: d["percent"])
+    track_history(history)
     history.track("gpu", "gpu", lambda d: d.get("util_pct"))
     store.add_listener(history.on_sample)
     schedule = NightSchedule(config.day_bri, config.night_bri, parse_hhmm(config.night_start), parse_hhmm(config.night_end))

@@ -51,15 +51,24 @@ class Screen:
         screen = self
         body = screen.to_bytes()
         while len(body) > limit:
-            sparks = [w for w in screen.widgets if isinstance(w, Spark) and w.v and len(w.v) > 8]
+            sparks = [w for w in screen.widgets if isinstance(w, Spark) and _samples(w) > 8]
             if not sparks:
                 raise LayoutError(f"screen is {len(body)} bytes, limit {limit}, nothing left to trim")
-            longest = max(sparks, key=lambda w: len(w.v or ()))
-            trimmed = replace(longest, v=list(longest.v or ())[len(longest.v or ()) // 2 :])
+            longest = max(sparks, key=_samples)
+            trimmed = replace(longest, v=_newer_half(longest.v), u=_newer_half(longest.u))
             screen = Screen(screen.settings, [trimmed if w is longest else w for w in screen.widgets])
             body = screen.to_bytes()
-            log.debug("trimmed %s to %d samples (%d bytes)", longest.id, len(trimmed.v or ()), len(body))
+            log.debug("trimmed %s to %d samples (%d bytes)", longest.id, _samples(trimmed), len(body))
         return body
+
+
+
+def _samples(spark: Spark) -> int:
+    return len(spark.v or ()) + len(spark.u or ())
+
+
+def _newer_half(series: Sequence[float] | None) -> list[float] | None:
+    return None if series is None else list(series)[len(series) // 2 :]
 
 
 def error_screen(message: str, settings: ScreenSettings | None = None) -> Screen:

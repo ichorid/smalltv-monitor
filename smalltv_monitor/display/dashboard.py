@@ -8,7 +8,8 @@ Layout (240x240), [x] = 16 px icon:
     [claude] [bar] 36%      [bar]   9%    <- remaining allowance: green >= 50 %, yellow >= 25 %, red
     [codex]  [bar] 77%      [bar]  72%
     [cursor] [bar] 24%     3-2 5-6 2      <- Cursor: billing cycle only; right: time to reset, all rows
-    [cpu]    ~~~~~ sparkline ~~~~~  41%   <- deep red (bottom) to yellow (top)
+    [cpu]    ~~ cpu ~~  41%  ~~~ i/o ~~~   <- CPU: deep red (bottom) to yellow (top); I/O: reads (green)
+                                             drawn over writes (red)
     [mem]    [used|shared|buf|cache] 29/62G   <- htop's memory meter
     [disk]   /       9.4G    /home     99G    <- yellow < 10 % free, red < 5 %
     [gpu]       250/300W    VRAM     9.6G
@@ -50,7 +51,11 @@ HEAT = ((0, "#3b82f6"), (25, "#14b8a6"), (50, "#f2cc38"), (75, "#fd8c00"), (100,
 # CPU sparkline height gradient: deep red at the bottom to yellow at the top
 SPARK_GRAD = ((0, "#8b0000"), (100, YELLOW))
 
-SPARK_SAMPLES = 120
+# CPU row: CPU sparkline + number in the left half, disk I/O sparkline in the right half (one sample per px)
+CPU_SPARK = (30, 104, 60, 34)
+CPU_VALUE = (90, 104, 40, 34)
+IO_SPARK = (134, 104, 98, 34)
+IO_FLOOR_MIB_S = 10.0  # the I/O scale never drops below this, so background trickles stay near the bottom
 ICON_X = 8
 X0 = 30  # content starts right of the 18 px icon column
 COL1_X, COL2_X = X0, 134  # the two limit columns: bar (56 px) + value (40 px) each
@@ -121,6 +126,13 @@ def _reset_summary(harnesses: Mapping[str, Any], now: datetime) -> str:
     return " ".join(parts)
 
 
+def track_history(history: History) -> None:
+    """Record the series this screen's sparklines draw, at the collectors' cadence."""
+    history.track("cpu", "cpu", lambda d: d["percent"])
+    history.track("io_read", "diskio", lambda d: d["read_mib_s"])
+    history.track("io_write", "diskio", lambda d: d["write_mib_s"])
+
+
 class DashboardComposer:
     def __init__(self, store: SnapshotStore, history: History, schedule: NightSchedule, title: str | None = None):
         self._store = store
@@ -141,6 +153,7 @@ class DashboardComposer:
             self._slack(data.get("slack")),
             *self._limits(data.get("limits"), now),
             *self._cpu(data.get("cpu")),
+            self._io(data.get("diskio")),
             *self._memory(data.get("memory")),
             *self._disks(data.get("disk")),
             *self._gpu(data.get("gpu")),
@@ -199,11 +212,24 @@ class DashboardComposer:
             _icon("icpu", "cpu", 104, height=34),
             # Solid heat area, no outline: every pixel's colour is set by its height (fa=100 makes the
             # edge pixels the same colour as their row, so no line is visible)
-            Spark(id="cpuh", r=(X0, 104, 160, 34), grad=SPARK_GRAD, fa=100, max=100,
-                  v=self._history.get("cpu", SPARK_SAMPLES) or None),
-            ValueText(id="cpuv", r=(192, 104, 40, 34), a="r",
+            Spark(id="cpuh", r=CPU_SPARK, grad=SPARK_GRAD, fa=100, max=100,
+                  v=self._history.get("cpu", CPU_SPARK[2]) or None),
+            ValueText(id="cpuv", r=CPU_VALUE, a="r",
                       v=None if cpu is None else (f"{cpu['percent']:.0f}%", gradient_colour(HEAT, cpu["percent"]))),
         ]
+
+    def _io(self, diskio: Mapping[str, Any] | None) -> Widget:
+        """Disk throughput: writes as a solid red area, reads drawn over them as a solid green one."""
+        samples = IO_SPARK[2]
+        reads, writes = self._history.get("io_read", samples), self._history.get("io_write", samples)
+        if diskio is None or not reads:
+            return Spark(id="io", r=IO_SPARK, v=None)
+        # Both series share one scale: the busiest moment shown (at least IO_FLOOR_MIB_S) is the top row.
+        # Samples are sent as pixel rows (0..h-1): no visible loss, and at most two digits each
+        rows = IO_SPARK[3] - 1
+        scale = max(IO_FLOOR_MIB_S, *reads, *writes)
+        return Spark(id="io", r=IO_SPARK, max=rows, c=GREEN, fill=GREEN, uc=RED,
+                     v=[rows * r / scale for r in reads], u=[rows * w / scale for w in writes])
 
     @staticmethod
     def _memory(mem: Mapping[str, Any] | None) -> list[Widget]:

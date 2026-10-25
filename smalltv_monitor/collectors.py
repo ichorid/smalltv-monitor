@@ -125,6 +125,46 @@ class DiskCollector(Collector):
         return {"mounts": mounts}
 
 
+class DiskIoCollector(Collector):
+    """Read and write throughput, summed over the physical disks.
+
+    Only block devices with a `device` link in sysfs count: partitions, loop devices (snaps) and
+    device-mapper layers would count the same bytes twice.
+    """
+
+    name = "diskio"
+
+    def __init__(self, interval: float, block_dir: str = "/sys/block") -> None:
+        self.interval = interval
+        self.block_dir = block_dir
+        self._last: tuple[float, int, int] | None = None
+
+    def _totals(self) -> tuple[int, int, list[str]]:
+        counters = psutil.disk_io_counters(perdisk=True) or {}
+        disks = sorted(n for n in counters if os.path.exists(os.path.join(self.block_dir, n, "device")))
+        if not disks:
+            raise SourceUnavailable("no physical disks in disk_io_counters")
+        return sum(counters[n].read_bytes for n in disks), sum(counters[n].write_bytes for n in disks), disks
+
+    def open(self) -> None:
+        read, written, _ = self._totals()  # reference sample: rates start with the first collect()
+        self._last = (time.monotonic(), read, written)
+
+    def collect(self) -> dict[str, Any]:
+        read, written, disks = self._totals()
+        now = time.monotonic()
+        last, self._last = self._last, (now, read, written)
+        if last is None or now <= last[0]:
+            raise SourceUnavailable("no reference sample yet")
+        elapsed = now - last[0]
+        # A disk that disappeared makes the totals drop: report 0 rather than a negative rate
+        return {
+            "read_mib_s": max(0, read - last[1]) / MIB / elapsed,
+            "write_mib_s": max(0, written - last[2]) / MIB / elapsed,
+            "disks": disks,
+        }
+
+
 class NvidiaGpuCollector(Collector):
     """Reads one GPU through NVML (the library nvidia-smi itself uses), without spawning processes.
 

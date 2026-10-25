@@ -924,7 +924,7 @@ index 0000000..ba396ea
 +#endif
 diff --git a/src/renderer/RendererManager.cpp b/src/renderer/RendererManager.cpp
 new file mode 100644
-index 0000000..840d59f
+index 0000000..a5512da
 --- /dev/null
 +++ b/src/renderer/RendererManager.cpp
 @@ -0,0 +1,314 @@
@@ -972,7 +972,7 @@ index 0000000..840d59f
 +constexpr size_t FW_SIZE = 48;
 +constexpr size_t LOG_SIZE = 96;
 +constexpr int UNKNOWN_BRIGHTNESS = -1;
-+constexpr const char* FW_SUFFIX = "-w1";  // widget protocol v1
++constexpr const char* FW_SUFFIX = "-w2";  // widget protocol v1, spark `u` series
 +constexpr uint32_t INCOMPLETE_MARK = 1;
 +
 +// Refuses allocations that would eat into PARSE_HEAP_RESERVE; ArduinoJson then reports NoMemory
@@ -1244,10 +1244,10 @@ index 0000000..840d59f
 +#endif
 diff --git a/src/renderer/WidgetModel.cpp b/src/renderer/WidgetModel.cpp
 new file mode 100644
-index 0000000..68a1c7c
+index 0000000..aa48e47
 --- /dev/null
 +++ b/src/renderer/WidgetModel.cpp
-@@ -0,0 +1,865 @@
+@@ -0,0 +1,868 @@
 +// SPDX-License-Identifier: GPL-3.0-or-later
 +// Widget protocol v1 model. No Arduino dependencies: compiled by test/host/run.sh as well.
 +#include "renderer/WidgetModel.h"
@@ -1488,7 +1488,10 @@ index 0000000..68a1c7c
 +                               checkInt(obj, "gap", 0, MAX_GAP, ErrorCode::Field), checkBarsValue(value)});
 +        case WidgetType::Spark: {
 +            Gradient gradient;
++            // `u` (a second series drawn underneath) is not combined with the height gradient
++            const ErrorCode layered = !obj["u"].isNull() && !obj["grad"].isNull() ? ErrorCode::Field : ErrorCode::None;
 +            return firstError({checkSparkRange(obj), checkColor(obj, "fill"), checkSparkValue(value),
++                               checkSparkValue(obj["u"]), checkColor(obj, "uc"), layered,
 +                               readGradient(obj["grad"], gradient),
 +                               checkInt(obj, "fa", 0, MAX_PERCENT, ErrorCode::Field)});
 +        }
@@ -2115,10 +2118,10 @@ index 0000000..68a1c7c
 +}  // namespace renderer
 diff --git a/src/renderer/WidgetPainter.cpp b/src/renderer/WidgetPainter.cpp
 new file mode 100644
-index 0000000..0e03f04
+index 0000000..7f02dff
 --- /dev/null
 +++ b/src/renderer/WidgetPainter.cpp
-@@ -0,0 +1,798 @@
+@@ -0,0 +1,874 @@
 +// SPDX-License-Identifier: GPL-3.0-or-later
 +// Widget drawing for the /v1/display renderer. Geometry follows the protocol's rendering conventions
 +// (docs/WIDGET-PROTOCOL.md) so the PC-side preview and the device agree.
@@ -2592,6 +2595,46 @@ index 0000000..0e03f04
 +    }
 +}
 +
++// Each sample's y relative to the rect, in 1/16 px
++auto sampleOffsets(JsonArrayConst samples, float minValue, float maxValue, const Rect& rect, uint16_t* out) -> void {
++    size_t index = 0;
++    for (const JsonVariantConst sample : samples) {
++        const float offset = sparkY(sample.as<float>(), minValue, maxValue, rect) - static_cast<float>(rect.y);
++        out[index++] = static_cast<uint16_t>(std::lround(offset * SUBPIXELS));
++    }
++}
++
++// Line y (relative to the rect) at a column, interpolated between the samples around it
++auto columnOffset(const uint16_t* sampleY, size_t count, int columnIndex, int width) -> float {
++    if (count < 2 || width < 2) {
++        return static_cast<float>(sampleY[0]) / SUBPIXELS;
++    }
++    const float position =
++        static_cast<float>(columnIndex) * static_cast<float>(count - 1) / static_cast<float>(width - 1);
++    const size_t left = std::min(static_cast<size_t>(position), count - 2);
++    const float fraction = position - static_cast<float>(left);
++    return (static_cast<float>(sampleY[left]) +
++            fraction * (static_cast<float>(sampleY[left + 1]) - static_cast<float>(sampleY[left]))) /
++           SUBPIXELS;
++}
++
++// Rows [top, bottom] of the line at a column: it spans halfway to its neighbours so consecutive columns
++// connect, and is at least 2 px thick
++auto lineRows(const uint16_t* sampleY, size_t count, int columnIndex, const Rect& rect, int& top, int& bottom)
++    -> void {
++    const float here = columnOffset(sampleY, count, columnIndex, rect.w);
++    const float before = columnIndex > 0 ? (here + columnOffset(sampleY, count, columnIndex - 1, rect.w)) / 2 : here;
++    const float after =
++        columnIndex + 1 < rect.w ? (here + columnOffset(sampleY, count, columnIndex + 1, rect.w)) / 2 : here;
++    top = static_cast<int>(std::lround(std::min({here, before, after})));
++    bottom = static_cast<int>(std::lround(std::max({here, before, after})));
++    if (bottom - top < 1) {
++        bottom = top + 1;
++    }
++    bottom = std::min(bottom, rect.h - 1);
++    top = std::max(0, std::min(top, bottom - 1));
++}
++
 +// Height gradient: each row has one line colour and one fill colour (row colour over the background at `fa`
 +// percent), so both are looked up from per-row tables built once per draw. Each column is then composed in a
 +// buffer (background, 2 px line, fill) and pushed as one window. Returns false if the scratch memory is not
@@ -2614,39 +2657,63 @@ index 0000000..0e03f04
 +    uint16_t* column = scratch + 2 * height;
 +    uint16_t* sampleY = scratch + 3 * height;
 +    fillRowColors(gradient, fillPercent, minValue, maxValue, widget, lineColors, fillColors);
-+    size_t index = 0;
-+    for (const JsonVariantConst sample : samples) {
-+        const float offset = sparkY(sample.as<float>(), minValue, maxValue, rect) - static_cast<float>(rect.y);
-+        sampleY[index++] = static_cast<uint16_t>(std::lround(offset * SUBPIXELS));
-+    }
-+    // Line y (relative to the rect) at a column, interpolated between the samples around it
-+    const auto lineY = [&](int columnIndex) -> float {
-+        if (count < 2 || rect.w < 2) {
-+            return static_cast<float>(sampleY[0]) / SUBPIXELS;
-+        }
-+        const float position =
-+            static_cast<float>(columnIndex) * static_cast<float>(count - 1) / static_cast<float>(rect.w - 1);
-+        const size_t left = std::min(static_cast<size_t>(position), count - 2);
-+        const float fraction = position - static_cast<float>(left);
-+        return (static_cast<float>(sampleY[left]) +
-+                fraction * (static_cast<float>(sampleY[left + 1]) - static_cast<float>(sampleY[left]))) /
-+               SUBPIXELS;
-+    };
-+    const int lastRow = rect.h - 1;
++    sampleOffsets(samples, minValue, maxValue, rect, sampleY);
 +    tft->setSwapBytes(true);  // buffers hold native-endian RGB565
 +    for (int columnIndex = 0; columnIndex < rect.w; ++columnIndex) {
-+        // The line spans halfway to its neighbours so consecutive columns connect, and is at least 2 px thick
-+        const float here = lineY(columnIndex);
-+        const float before = columnIndex > 0 ? (here + lineY(columnIndex - 1)) / 2 : here;
-+        const float after = columnIndex + 1 < rect.w ? (here + lineY(columnIndex + 1)) / 2 : here;
-+        int top = static_cast<int>(std::lround(std::min({here, before, after})));
-+        int bottom = static_cast<int>(std::lround(std::max({here, before, after})));
-+        if (bottom - top < 1) {
-+            bottom = top + 1;
-+        }
-+        bottom = std::min(bottom, lastRow);
-+        top = std::max(0, std::min(top, bottom - 1));
++        int top = 0;
++        int bottom = 0;
++        lineRows(sampleY, count, columnIndex, rect, top, bottom);
 +        composeColumn(column, rect.h, top, bottom, lineColors, fillColors, widget.bg);
++        tft->pushImage(rect.x + columnIndex, rect.y, 1, rect.h, column);
++        if (columnIndex % SPARK_YIELD_COLUMNS == 0) {
++            yield();
++        }
++    }
++    tft->setSwapBytes(false);
++    std::free(scratch);
++    return true;
++}
++
++// Two series: `u` as a solid area in `uc`, then the main series over it (line in `c`, area below it in `fill`
++// if given), so the main series hides `u` wherever it is as high. Composed per column like the gradient
++// sparkline, so nothing flickers. Returns false if the scratch memory is not available.
++auto drawLayeredSpark(const Widget& widget, JsonArrayConst samples, JsonArrayConst under, float minValue,
++                      float maxValue) -> bool {
++    const JsonObjectConst obj = widget.obj;
++    const Rect& rect = widget.rect;
++    const size_t count = samples.isNull() ? 0 : samples.size();
++    const size_t underCount = under.size();
++    const auto height = static_cast<size_t>(rect.h);
++    // Column buffer, then both series' y in 1/16 px
++    auto* scratch = static_cast<uint16_t*>(std::malloc((height + count + underCount) * sizeof(uint16_t)));
++    if (scratch == nullptr) {
++        return false;
++    }
++    uint16_t* column = scratch;
++    uint16_t* sampleY = scratch + height;
++    uint16_t* underY = sampleY + count;
++    sampleOffsets(samples, minValue, maxValue, rect, sampleY);
++    sampleOffsets(under, minValue, maxValue, rect, underY);
++    const uint16_t underColor = colorOr(obj["uc"], DEFAULT_FG);
++    const bool hasFill = !obj["fill"].isNull();
++    const uint16_t fill = colorOr(obj["fill"], widget.bg);
++    tft->setSwapBytes(true);  // buffers hold native-endian RGB565
++    for (int columnIndex = 0; columnIndex < rect.w; ++columnIndex) {
++        int top = rect.h;  // no main series: no line
++        int bottom = rect.h;
++        if (count > 0) {
++            lineRows(sampleY, count, columnIndex, rect, top, bottom);
++        }
++        const auto underTop = static_cast<int>(std::lround(columnOffset(underY, underCount, columnIndex, rect.w)));
++        for (int row = 0; row < rect.h; ++row) {
++            uint16_t color = row >= underTop ? underColor : widget.bg;
++            if (row >= top && row <= bottom) {
++                color = widget.color;
++            } else if (row > bottom && hasFill) {
++                color = fill;
++            }
++            column[row] = color;
++        }
 +        tft->pushImage(rect.x + columnIndex, rect.y, 1, rect.h, column);
 +        if (columnIndex % SPARK_YIELD_COLUMNS == 0) {
 +            yield();
@@ -2661,8 +2728,10 @@ index 0000000..0e03f04
 +    const JsonObjectConst obj = widget.obj;
 +    const Rect& rect = widget.rect;
 +    const auto samples = obj["v"].as<JsonArrayConst>();
++    const auto under = obj["u"].as<JsonArrayConst>();
 +    const size_t count = samples.isNull() ? 0 : samples.size();
-+    if (count == 0) {
++    const size_t underCount = under.isNull() ? 0 : under.size();
++    if (count == 0 && underCount == 0) {
 +        fillPart(rect.x, rect.y, rect.w, rect.h, widget.bg);
 +        return;
 +    }
@@ -2670,14 +2739,24 @@ index 0000000..0e03f04
 +    float maxValue = 0;
 +    if (obj["max"].is<float>()) {
 +        maxValue = obj["max"].as<float>();
-+    } else {  // no max: scale to the largest sample
++    } else {  // no max: scale to the largest sample of either series
 +        maxValue = minValue;
 +        for (const JsonVariantConst sample : samples) {
++            maxValue = std::max(maxValue, sample.as<float>());
++        }
++        for (const JsonVariantConst sample : under) {
 +            maxValue = std::max(maxValue, sample.as<float>());
 +        }
 +    }
 +    if (!(maxValue > minValue)) {
 +        maxValue = minValue + 1;
++    }
++    if (underCount > 0 && drawLayeredSpark(widget, samples, under, minValue, maxValue)) {
++        return;
++    }
++    if (count == 0) {  // only `u`, and no memory to draw it
++        fillPart(rect.x, rect.y, rect.w, rect.h, widget.bg);
++        return;
 +    }
 +    if (!obj["grad"].isNull() && drawGradientSpark(widget, samples, minValue, maxValue)) {
 +        return;
@@ -7391,10 +7470,10 @@ index 0000000..b317e4a
 +"$out/widget_model_test"
 diff --git a/test/host/widget_model_test.cpp b/test/host/widget_model_test.cpp
 new file mode 100644
-index 0000000..8dd3f89
+index 0000000..c43f261
 --- /dev/null
 +++ b/test/host/widget_model_test.cpp
-@@ -0,0 +1,420 @@
+@@ -0,0 +1,442 @@
 +// SPDX-License-Identifier: GPL-3.0-or-later
 +// Host test for src/renderer/WidgetModel.cpp: g++ only, no Arduino. Run test/host/run.sh.
 +#include <cmath>
@@ -7805,6 +7884,27 @@ index 0000000..8dd3f89
 +
 +}  // namespace
 +
++void testUnderSeries() {
++    const auto spark = [](const std::string& extra) {
++        return one(R"({"id":"s","t":"spark","r":[0,0,100,20],"c":"#3fb950","fill":"#3fb950","v":[1,50,99])" + extra +
++                   "}");
++    };
++    EXPECT(codeOf(spark(R"(,"u":[5,80,2],"uc":"#f2384c")")) == ErrorCode::None);
++    EXPECT(codeOf(spark(R"(,"u":[5,80])")) == ErrorCode::None);  // lengths may differ, `uc` optional
++    EXPECT(codeOf(spark(R"(,"u":[])")) == ErrorCode::None);
++    EXPECT(codeOf(spark(R"(,"u":[1,"x"])")) == ErrorCode::Value);
++    EXPECT(codeOf(spark(R"(,"u":"#f2384c")")) == ErrorCode::Value);
++    EXPECT(codeOf(spark(R"(,"u":[1],"uc":"red")")) == ErrorCode::Color);
++    EXPECT(codeOf(spark(R"(,"u":[1],"grad":[[0,"#000000"],[100,"#ffffff"]])")) == ErrorCode::Field);
++    std::string many = R"(,"u":[)";
++    for (size_t i = 0; i <= renderer::MAX_SPARK; ++i) {
++        many += (i == 0 ? "1" : ",1");
++    }
++    EXPECT(codeOf(spark(many + "]")) == ErrorCode::Value);
++    // Only `u`: valid (the main series may be empty)
++    EXPECT(codeOf(one(R"({"id":"s","t":"spark","r":[0,0,100,20],"v":null,"u":[1,2]})")) == ErrorCode::None);
++}
++
 +auto main() -> int {
 +    testSpecExample();
 +    testRejections();
@@ -7812,6 +7912,7 @@ index 0000000..8dd3f89
 +    testBoundedReader();
 +    testIcons();
 +    testGradient();
++    testUnderSeries();
 +    std::printf("%d checks, %d failures\n", checks, failures);
 +    return failures == 0 ? 0 : 1;
 +}

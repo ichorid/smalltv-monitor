@@ -62,7 +62,7 @@ glyph; the renderer reads its advance after loading, because TFT_eSPI otherwise 
 
 Every `screen.poll_ms` (default 1000, clamped to 250–60 000):
 
-1. `GET DISPLAY_URL?fw=<git describe>-w1&heap=&blk=&up=&rssi=&err=` over HTTP/1.0 (`useHTTP10`), 800 ms timeout.
+1. `GET DISPLAY_URL?fw=<git describe>-w2&heap=&blk=&up=&rssi=&err=` over HTTP/1.0 (`useHTTP10`), 800 ms timeout.
 2. No 200 response → transport failure. 200 → `Content-Length` checked **before** parsing: missing or
    > 4096 → `err=2`, previous frame kept.
 3. Streaming parse from the socket through a reader that stops at `Content-Length` (a lying server cannot
@@ -111,6 +111,11 @@ the neighbouring columns' y so it stays connected (not anti-aliased, unlike the 
 `fill` are ignored with `grad`. Scratch memory is one short-lived heap block of 2·(3·h + n) bytes: at most
 1 680 B (240-row LUTs 960 B + 480 B column buffer + 240 B for 120 sample positions); if it can't be
 allocated, the plain sparkline is drawn instead.
+
+Second sparkline series (`u`, `uc`; since `-w2`): composed per column like the gradient path, in one buffer
+(background, then `u`'s solid area, then the main series' 2 px line in `c` and its `fill` below), so the main
+series overdraws `u` and nothing flickers. Scratch memory: 2·(h + n + n_u) bytes (≤ 548 B); if it can't be
+allocated, the plain sparkline of the main series is drawn. Used for disk I/O (reads over writes).
 
 A rounded single-value bar is painted as fill body, then the fill's rounded end over the track, then the rest
 of the track, so only the few pixels at the fill's end are repainted twice.
